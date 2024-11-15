@@ -41,8 +41,8 @@ def main():
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 
     # 이미지 크기 설정 (예: 640x480 -> fhd:1920x1080(30fps) -> hd:1280*720(60fps))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 60)  # 60fps로 설정
 
 
@@ -73,12 +73,15 @@ def main():
 
 
     fps = cap.get(cv2.CAP_PROP_FPS)
+    print("cap.get fps: {:.2f}".format(fps))
     imshape = (int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
 
     camera = cameralib.Camera.from_fov(fov_degrees=55, imshape=imshape)
 
     with poseviz.PoseViz(joint_names, joint_edges) as viz:
-        viz.new_sequence_output("../YOUR_OUTPUT_VIDEO_PATH.mp4", fps=fps)
+        #viz.new_sequence_output("../YOUR_OUTPUT_VIDEO_PATH.mp4", fps=fps)
+
+        start_time = time.time()
 
         try:
             while True:
@@ -87,23 +90,23 @@ def main():
 
                 # 성공적으로 프레임을 읽었는지 확인
                 if ret:
-                    #frame_count += 1
+                    frame_count += 1
 
-                    # 현재 시간
-                    #current_time = time.time()
+                    #현재 시간
+                    current_time = time.time()
 
-                    # 지난 시간 계산
-                    #elapsed_time = current_time - start_time
+                    #지난 시간 계산
+                    elapsed_time = current_time - start_time
 
                     # 지난시간이 1초가 되면
-                    # if elapsed_time >= 1:
-                    #     # 프레임 속도 계산 및 출력면
-                    #     fps_cal = frame_count / elapsed_time
-                    #     print("FPS: {:.2f}".format(fps_cal))
+                    if elapsed_time >= 1:
+                        # 프레임 속도 계산 및 출력면
+                        fps_cal = frame_count / elapsed_time
+                        print("FPS: {:.2f}".format(fps_cal))
 
-                    #     # 카운터 및 타이머 초기화
-                    #     frame_count = 0
-                    #     start_time = time.time()
+                        # 카운터 및 타이머 초기화
+                        frame_count = 0
+                        start_time = time.time()
 
                     # 프레임 표시 -> 모델 추정으로 수정할 부분!
                     frame_batch = np.expand_dims(frame, axis=0)  # Shape (1, height, width, 3)
@@ -118,7 +121,7 @@ def main():
                     poses = pred["poses3d"][0]
                     viz.update(frame=frame, boxes=boxes, poses=poses, camera=camera)
 
-                    cv2.imshow('Webcam Frame', frame)
+                    #cv2.imshow('Webcam Frame', frame)
 
                     # 키 입력 대기 (예: 'q'를 누르면 중단)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -144,9 +147,9 @@ def main():
         #         viz.update(frame=frame, boxes=boxes, poses=poses, camera=camera)
 
 
-    # 사용이 끝났으면 웹캠을 해제
-    cap.release()
-    cv2.destroyAllWindows()
+        # 사용이 끝났으면 웹캠을 해제
+        cap.release()
+        #cv2.destroyAllWindows()
 
 
 # def get_video(source, temppath="/tmp/video.mp4"):
