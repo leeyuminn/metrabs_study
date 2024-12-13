@@ -5,12 +5,13 @@ import time
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 os.environ['KMP_INIT_AT_FORK'] = 'FALSE'
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 import tensorflow as tf
 import tensorflow_hub as tfhub
 import numpy as np
 import transforms3d
-import poseviz
+#import poseviz
 
 import argparse
 
@@ -20,13 +21,19 @@ from simplepyutils import FLAGS
 import simplepyutils as spu
 import tensorflow_inputs as tfinp
 
+import matplotlib
+matplotlib.use("TkAgg")  # Tkinter 백엔드 사용
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from mpl_toolkits.mplot3d import Axes3D
+
 
 def initialize():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-path', type=str, default='https://bit.ly/metrabs_s')
     parser.add_argument('--camera-id', type=int, default='1')
     parser.add_argument('--viz-downscale', type=int, default=4)
-    parser.add_argument('--out-video-path', type=str, default=None)
+    parser.add_argument('--out-video-path', type=str, default='./output.mp4')
     parser.add_argument('--out-video-fps', type=int, default=15)
     parser.add_argument('--num-aug', type=int, default=1)
     parser.add_argument('--skeleton', type=str, default='smpl+head_30')
@@ -44,6 +51,48 @@ def initialize():
     logging.getLogger('absl').setLevel('ERROR')
     for gpu in tf.config.experimental.list_physical_devices('GPU'):
         tf.config.experimental.set_memory_growth(gpu, True)
+
+
+def visualize_with_matplotlib(image, detections, poses3d, poses2d, edges):
+    """
+    Visualizes detections, 3D poses, and 2D poses using matplotlib in real-time.
+    """
+    plt.clf()  # Clear the current figure for real-time updates
+    
+    # Subplot for the image and 2D detections
+    image_ax = plt.subplot(1, 2, 1)
+    image_ax.imshow(image)
+    for x, y, w, h in detections[:, :4]:
+        image_ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor='red'))
+
+    # Subplot for the 3D pose
+    pose_ax = plt.subplot(1, 2, 2, projection='3d')
+    pose_ax.view_init(5, -85)
+    pose_ax.set_xlim3d(-1500, 1500)
+    pose_ax.set_ylim3d(0, 3000)
+    pose_ax.set_zlim3d(-1500, 1500)
+
+    # Adjust 3D pose coordinate system
+    for pose3d, pose2d in zip(poses3d, poses2d):
+        pose3d[:, [1, 2]] = pose3d[:, [2, 1]]  # Swap Y and Z axes
+        pose3d[:, 2] *= -1  # Flip Z axis
+
+        for i_start, i_end in edges:
+            image_ax.plot(
+                [pose2d[i_start, 0], pose2d[i_end, 0]],
+                [pose2d[i_start, 1], pose2d[i_end, 1]],
+                marker='o', markersize=2, color='blue')
+            pose_ax.plot(
+                [pose3d[i_start, 0], pose3d[i_end, 0]],
+                [pose3d[i_start, 1], pose3d[i_end, 1]],
+                [pose3d[i_start, 2], pose3d[i_end, 2]],
+                marker='o', markersize=2, color='green')
+
+        image_ax.scatter(pose2d[:, 0], pose2d[:, 1], s=2, color='yellow')
+        pose_ax.scatter(pose3d[:, 0], pose3d[:, 1], pose3d[:, 2], s=2, color='red')
+
+    plt.draw()  # Draw the updated plot
+    plt.pause(0.001)  # Pause briefly to allow the plot to update
 
 
 def main():
@@ -69,59 +118,31 @@ def main():
         antialias_factor=FLAGS.antialias_factor, num_aug=FLAGS.num_aug,
         suppress_implausible_poses=True, skeleton=FLAGS.skeleton)
 
-    viz = poseviz.PoseViz(joint_names, joint_edges, high_quality=False, ground_plane_height=0)
-    print("webcam() 함수 호출 시작...")
-    start_time = time.time()  # 시작 시간 기록
     frame_batches_gpu, frame_batches_cpu = tfinp.webcam(
         capture_id=FLAGS.camera_id, batch_size=FLAGS.batch_size, prefetch_gpu=1)
-    webcamFunc_end_time = time.time()
-    webcamFunc_elapsed_time = webcamFunc_end_time - start_time
-    print(f"webcam() 함수 호출 완료. 실행 시간: {webcamFunc_elapsed_time:.4f}초")
 
-    progbar = spu.progressbar()
-    if FLAGS.out_video_path:
-        viz.new_sequence_output(FLAGS.out_video_path, fps=FLAGS.out_video_fps)
+    plt.figure(figsize=(10, 5.2))  # Initialize the matplotlib figure
 
-    try:
+    frame_count = 0
+    start_time = time.time()
 
-        frame_index = 0
-        frame_count = 0
-        start_time = time.time()
+    for frames_gpu, frames_cpu in zip(frame_batches_gpu, frame_batches_cpu):
+        frames_gpu = frames_gpu[:, :, ::-1]
+        frames_cpu = [f[:, ::-1] for f in frames_cpu]
 
-        for frames_gpu, frames_cpu in zip(frame_batches_gpu, frame_batches_cpu):
-            print(f"GPU Batch Shape: {frames_gpu.shape}")  # 텐서의 shape
-            print(f"CPU Batch Shape: {np.array(frames_cpu).shape}")  # NumPy 배열의 shape
-            
-            frame_index += 1
-            print(f"Frame {frame_index} 처리 중...")
-            # Horizontally flip the images,
-            # so that the demo feels more natural, like looking into a mirror.
-            frames_gpu = frames_gpu[:, :, ::-1]
-            frames_cpu = [f[:, ::-1] for f in frames_cpu]
-            print(f"Frame {frame_index} 처리 완료.")
+        pred = predict_fn(frames_gpu)
+        for frame, boxes, poses3d, poses2d in zip(
+                frames_cpu, pred['boxes'].numpy(), pred['poses3d'].numpy(), pred['poses2d'].numpy()):
+            visualize_with_matplotlib(frame, boxes, poses3d, poses2d, joint_edges)
 
-            print(f"Frame {frame_index}에 대해 3D pose 추정 중...")
-            pred = predict_fn(frames_gpu)
-            print(f"Frame {frame_index}에 대한 3D pose 추정 완료.")
-            for frame, boxes, poses in zip(
-                    frames_cpu, pred['boxes'].numpy(), pred['poses3d'].numpy()):
-                print(f"Frame {frame_index} 시각화 중...")
-                viz.update(frame, boxes[:, :4], poses, camera, block=False)
-                print(f"Frame {frame_index} 시각화 완료.")
+            frame_count += 1
+            elapsed_time = time.time() - start_time
 
-                progbar.update()
-
-                frame_count += 1
-                elapsed_time = time.time() - start_time
-
-                # Calculate and print FPS every 1 second
-                if elapsed_time >= 1.0:
-                    fps = frame_count / elapsed_time
-                    print(f"FPS: {fps:.2f}")
-                    frame_count = 0
-                    start_time = time.time()
-    finally:
-        viz.close()
+            if elapsed_time >= 1.0:
+                fps = frame_count / elapsed_time
+                print(f"FPS: {fps:.2f}")
+                frame_count = 0
+                start_time = time.time()
 
 
 if __name__ == '__main__':
